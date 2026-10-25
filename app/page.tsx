@@ -1,158 +1,60 @@
 'use client'
 
+import dynamic from 'next/dynamic'
 import { useMemo, useState } from 'react'
-import {
-  Activity,
-  AlertTriangle,
-  ArrowDown,
-  ArrowRight,
-  BarChart3,
-  Bell,
-  ChevronDown,
-  CloudRain,
-  Droplets,
-  Factory,
-  Gauge,
-  Globe2,
-  Layers3,
-  MapPin,
-  Menu,
-  Mountain,
-  PackageCheck,
-  Radio,
-  Settings2,
-  ShieldAlert,
-  Siren,
-  SlidersHorizontal,
-  Truck,
-  Users,
-  Waves,
-  Wind,
-  X,
-  Zap,
-} from 'lucide-react'
 
-const initialInputs = {
-  rainfall: 184,
-  river: 4.8,
-  soil: 72,
-  slope: 28,
-  elevation: 412,
-  temperature: 23,
-  density: 1260,
-  distance: 1.2,
-  roads: 64,
-  infrastructure: 71,
+const LeafletMap = dynamic(() => import('./leaflet-map'), { ssr: false })
+import { Activity, AlertTriangle, ArrowDown, ArrowRight, BarChart3, Bell, ChevronDown, CloudRain, Droplets, Gauge, Layers3, MapPin, Menu, Mountain, PackageCheck, Radio, ShieldAlert, Siren, SlidersHorizontal, Truck, Users, Waves, X, Zap, RotateCcw, FileText, Download, CheckCircle2 } from 'lucide-react'
+
+type Inputs = { rainfall:number; river:number; soil:number; slope:number; density:number; roads:number; infrastructure:number; distance:number }
+type Risks = { flood:number; landslide:number; power:number; water:number }
+export type Zone = { name:string; population:number; rainfall:number; flood:number; landslide:number; accessibility:number; vulnerability:number; priority:number; lat:number; lon:number }
+
+const initialInputs: Inputs = { rainfall:184, river:4.8, soil:72, slope:28, density:1260, roads:64, infrastructure:71, distance:1.2 }
+const scenarios: Record<string, Inputs> = {
+  'Extreme Rainfall': { rainfall:420, river:9.6, soil:88, slope:35, density:2400, roads:42, infrastructure:78, distance:.8 },
+  'River Flood + Saturated Soil': { rainfall:260, river:13.2, soil:96, slope:22, density:1800, roads:35, infrastructure:69, distance:.4 },
+  'Rainfall + Landslide Risk': { rainfall:330, river:6.2, soil:91, slope:52, density:980, roads:28, infrastructure:74, distance:4.5 },
 }
+const zoneSeeds = [
+  ['Zone A','Riverside',18420,14.612,75.019], ['Zone B','North Ridge',9870,14.642,75.047], ['Zone C','East Junction',12610,14.588,75.071], ['Zone D','Old Market',7240,14.570,74.989], ['Zone E','South Fields',5980,14.548,75.034],
+] as const
+const clamp = (n:number) => Math.max(0, Math.min(100, Math.round(n)))
+const severity = (n:number) => n >= 80 ? 'Critical' : n >= 60 ? 'High' : n >= 35 ? 'Moderate' : 'Low'
 
-const zones = [
-  { name: 'Zone A', label: 'Riverside', lat: '14.612° N', lon: '75.019° E', population: '18,420', risk: 89, vulnerability: 82, priority: 94, color: 'high', x: 19, y: 50 },
-  { name: 'Zone B', label: 'North Ridge', lat: '14.642° N', lon: '75.047° E', population: '9,870', risk: 74, vulnerability: 66, priority: 78, color: 'medium', x: 53, y: 23 },
-  { name: 'Zone C', label: 'East Junction', lat: '14.588° N', lon: '75.071° E', population: '12,610', risk: 68, vulnerability: 71, priority: 76, color: 'medium', x: 78, y: 55 },
-  { name: 'Zone D', label: 'Old Market', lat: '14.570° N', lon: '74.989° E', population: '7,240', risk: 41, vulnerability: 48, priority: 46, color: 'low', x: 45, y: 73 },
-  { name: 'Zone E', label: 'South Fields', lat: '14.548° N', lon: '75.034° E', population: '5,980', risk: 32, vulnerability: 38, priority: 35, color: 'low', x: 69, y: 84 },
-]
-
-const initialRisks = { flood: 82, landslide: 67, power: 54, water: 71 }
-
-type RiskKey = keyof typeof initialRisks
-
-function riskTone(value: number) {
-  if (value >= 75) return 'critical'
-  if (value >= 50) return 'elevated'
-  return 'stable'
+function predict(i:Inputs): Risks {
+  const proximity = 100 - i.distance * 5
+  const flood = clamp(i.rainfall*.12 + i.river*3.8 + i.soil*.18 + proximity*.22)
+  const landslide = clamp(i.rainfall*.08 + i.soil*.2 + i.slope*.62 + flood*.22)
+  const power = clamp(flood*.42 + landslide*.25 + i.infrastructure*.38)
+  const water = clamp(flood*.45 + i.rainfall*.1 + i.density/10000*22)
+  return { flood, landslide, power, water }
 }
-
-function MetricCard({ label, value, unit, icon: Icon, tone, detail }: { label: string; value: string; unit?: string; icon: typeof CloudRain; tone?: string; detail: string }) {
-  return (
-    <div className="metric-card">
-      <div className="metric-topline"><span>{label}</span><Icon size={16} /></div>
-      <div className="metric-value">{value}<small>{unit}</small></div>
-      <div className={`metric-detail ${tone ?? ''}`}><span className="metric-dot" />{detail}</div>
-    </div>
-  )
+function makeZones(i:Inputs, r:Risks): Zone[] {
+  return zoneSeeds.map(([name, , population, lat, lon], index) => {
+    const modifier = [1.08,.94,.88,.7,.58][index]
+    const flood = clamp(r.flood*modifier + (index === 0 ? 8 : 0))
+    const landslide = clamp(r.landslide * (index === 1 || index === 2 ? 1.08 : modifier))
+    const accessibility = clamp(i.roads - index*6 + 10)
+    const vulnerability = clamp(i.infrastructure*.55 + (population/10000)*18 + index*3)
+    const priority = clamp(((flood+landslide)/2) * (vulnerability/100) * (1 + (100-accessibility)/140))
+    return { name, population, rainfall:Math.round(i.rainfall*(1 + (index-2)*.06)), flood, landslide, accessibility, vulnerability, priority, lat, lon }
+  }).sort((a,b) => b.priority-a.priority)
 }
-
-function RiskBar({ label, value, icon: Icon }: { label: string; value: number; icon: typeof Waves }) {
-  return <div className="risk-row">
-    <div className="risk-label"><Icon size={15} /><span>{label}</span><strong>{value}%</strong></div>
-    <div className="risk-track"><div className={`risk-fill ${riskTone(value)}`} style={{ width: `${value}%` }} /></div>
-  </div>
-}
-
-function MapPanel({ selected, onSelect }: { selected: string; onSelect: (name: string) => void }) {
-  return <div className="map-panel">
-    <div className="map-grid" aria-hidden="true" />
-    <svg className="map-river" viewBox="0 0 600 330" preserveAspectRatio="none" aria-hidden="true"><path d="M80 0 C150 65 92 105 180 142 S250 220 198 330" fill="none" stroke="rgba(48,182,205,.35)" strokeWidth="26" /><path d="M80 0 C150 65 92 105 180 142 S250 220 198 330" fill="none" stroke="rgba(96,220,229,.48)" strokeWidth="2" /></svg>
-    <div className="map-road road-one" /><div className="map-road road-two" /><div className="map-road road-three" />
-    {zones.map((zone) => <button aria-label={`Select ${zone.name}`} key={zone.name} onClick={() => onSelect(zone.name)} className={`map-marker ${zone.color} ${selected === zone.name ? 'selected' : ''}`} style={{ left: `${zone.x}%`, top: `${zone.y}%` }}><span>{zone.name.replace('Zone ', '')}</span></button>)}
-    <div className="map-label river-label"><Droplets size={12} /> Kaveri basin</div>
-    <div className="map-legend"><span><i className="legend-dot high" />High risk</span><span><i className="legend-dot medium" />Elevated</span><span><i className="legend-dot low" />Stable</span></div>
-    <div className="map-controls"><button aria-label="Zoom in">+</button><button aria-label="Zoom out">−</button></div>
-  </div>
-}
+function tone(n:number) { return n >= 75 ? 'high' : n >= 50 ? 'medium' : 'low' }
+function Metric({ label, value, unit, icon:Icon, detail }: {label:string;value:string;unit?:string;icon:typeof CloudRain;detail:string}) { return <div className="metric-card"><div className="metric-topline"><span>{label}</span><Icon size={16}/></div><div className="metric-value">{value}<small>{unit}</small></div><div className="metric-detail"><span className="metric-dot"/>{detail}</div></div> }
+function RiskBar({ label, value, icon:Icon }: {label:string;value:number;icon:typeof Waves}) { return <div className="risk-row"><div className="risk-label"><Icon size={15}/><span>{label}</span><strong>{value}%</strong></div><div className="risk-track"><div className={`risk-fill ${tone(value)}`} style={{width:`${value}%`}}/></div></div> }
+function ZoneMap({ zones, selected, onSelect }: {zones:Zone[];selected:string;onSelect:(z:Zone)=>void}) { return <div className="leaflet-wrap"><LeafletMap zones={zones} selected={selected} onSelect={onSelect}/><div className="map-legend"><span><i className="legend-dot high"/>Critical</span><span><i className="legend-dot medium"/>High</span><span><i className="legend-dot low"/>Medium / Low</span></div></div> }
 
 export default function Page() {
-  const [inputs, setInputs] = useState(initialInputs)
-  const [risks, setRisks] = useState(initialRisks)
-  const [selected, setSelected] = useState('Zone A')
-  const [activeNav, setActiveNav] = useState('Overview')
-  const [sidebarOpen, setSidebarOpen] = useState(false)
-  const [running, setRunning] = useState(false)
-  const [lastRun, setLastRun] = useState('Today, 14:32:08')
-
-  const overall = Math.round((risks.flood * .36 + risks.landslide * .24 + risks.power * .18 + risks.water * .22))
-  const vulnerable = useMemo(() => (18420 + 9870 + 12610 + 7240 + 5980).toLocaleString(), [])
-  const selectedZone = zones.find((zone) => zone.name === selected) ?? zones[0]
-
-  function updateInput(key: keyof typeof inputs, value: string) {
-    setInputs((current) => ({ ...current, [key]: Number(value) }))
-  }
-
-  function runSimulation() {
-    setRunning(true)
-    window.setTimeout(() => {
-      const rainfallDelta = (inputs.rainfall - 160) / 8
-      const riverDelta = (inputs.river - 4) * 7
-      setRisks({
-        flood: Math.max(12, Math.min(98, Math.round(76 + rainfallDelta + riverDelta))),
-        landslide: Math.max(8, Math.min(96, Math.round(53 + rainfallDelta * .65 + inputs.slope * .35 + inputs.soil * .08))),
-        power: Math.max(8, Math.min(94, Math.round(38 + rainfallDelta * .45 + riverDelta * .55))),
-        water: Math.max(10, Math.min(97, Math.round(57 + rainfallDelta * .6 + riverDelta * .5))),
-      })
-      setRunning(false)
-      setLastRun('Just now')
-    }, 600)
-  }
-
-  const navItems = [
-    { label: 'Overview', icon: Gauge }, { label: 'Risk zones', icon: MapPin }, { label: 'Resources', icon: PackageCheck }, { label: 'Cascade model', icon: Layers3 }, { label: 'Reports', icon: BarChart3 },
-  ]
-
-  return <main className="app-shell">
-    <aside className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
-      <div className="brand"><div className="brand-mark"><ShieldAlert size={19} /></div><div><strong>Cascade<span>Guard</span></strong><small>AI RESPONSE SYSTEM</small></div><button className="mobile-close" onClick={() => setSidebarOpen(false)} aria-label="Close navigation"><X size={18} /></button></div>
-      <div className="system-status"><span className="pulse" /> SYSTEM OPERATIONAL <span className="status-time">LIVE</span></div>
-      <nav>{navItems.map(({ label, icon: Icon }) => <button key={label} onClick={() => { setActiveNav(label); setSidebarOpen(false) }} className={activeNav === label ? 'active' : ''}><Icon size={17} />{label}{label === 'Risk zones' && <span className="nav-count">5</span>}</button>)}</nav>
-      <div className="sidebar-bottom"><div className="sidebar-caption">SIMULATION MODE</div><div className="demo-note"><Radio size={15} /><span><b>Demo environment</b><small>Predictions use synthetic data</small></span></div><button className="settings"><Settings2 size={16} /> System settings</button></div>
-    </aside>
-    <section className="content">
-      <header className="topbar"><button className="mobile-menu" onClick={() => setSidebarOpen(true)} aria-label="Open navigation"><Menu /></button><div className="breadcrumb"><span>Operations center</span><ChevronDown size={14} /><b>{activeNav}</b></div><div className="topbar-actions"><div className="last-updated"><span className="live-dot" /> Live data <small>{lastRun}</small></div><button className="icon-button" aria-label="Notifications"><Bell size={18} /><i /></button><div className="operator"><div className="avatar">RS</div><span><b>Response desk</b><small>Operator</small></span><ChevronDown size={15} /></div></div></header>
-      <div className="page-content">
-        <div className="page-heading"><div><div className="eyebrow"><span className="eyebrow-line" /> DECISION SUPPORT / DISTRICT 07</div><h1>Disaster cascade <em>monitor</em></h1><p>Predict cascading impacts and direct emergency response where it matters most.</p></div><div className="heading-actions"><button className="outline-button"><SlidersHorizontal size={15} /> Configure view</button><button className="primary-button" onClick={runSimulation}><Activity size={16} /> {running ? 'Running model...' : 'Run simulation'}</button></div></div>
-        <div className="prototype-banner"><AlertTriangle size={16} /><span><b>Simulation prototype</b> — predictions are for demonstration and decision-support purposes only.</span><button aria-label="Dismiss notice">×</button></div>
-        <section className="metrics-grid"><MetricCard label="Rainfall intensity" value={String(inputs.rainfall)} unit="mm" icon={CloudRain} detail="Above seasonal threshold" tone="critical" /><MetricCard label="River level" value={inputs.river.toFixed(1)} unit="m" icon={Waves} detail="Rising · +0.8m / 3h" tone="critical" /><MetricCard label="Overall disaster risk" value={`${overall}%`} icon={ShieldAlert} detail={overall > 70 ? 'Critical response posture' : 'Elevated posture'} tone="critical" /><MetricCard label="People at risk" value={vulnerable} icon={Users} detail="Across 5 monitored zones" tone="elevated" /><MetricCard label="High-risk zones" value="2" icon={MapPin} detail="Priority intervention needed" tone="critical" /> </section>
-        <div className="dashboard-grid">
-          <section className="panel cascade-panel"><div className="panel-header"><div><div className="section-kicker">01 / CASCADE ENGINE</div><h2>Predicted disaster chain</h2><p>How the current event is expected to propagate</p></div><span className="confidence"><span className="live-dot" /> Model confidence <b>91%</b></span></div><div className="cascade-flow"><div className="cascade-node origin"><div className="node-icon"><CloudRain size={20} /></div><span className="node-step">PRIMARY EVENT</span><strong>Extreme rainfall</strong><small>{inputs.rainfall} mm / 24 hours</small></div><ArrowDown className="flow-arrow" size={18} /><div className={`cascade-node ${riskTone(risks.flood)}`}><div className="node-icon"><Waves size={20} /></div><span className="node-step">CASCADE 01</span><strong>Flooding</strong><small><b>{risks.flood}%</b> probability</small></div><ArrowDown className="flow-arrow" size={18} /><div className={`cascade-node ${riskTone(risks.landslide)}`}><div className="node-icon"><Mountain size={20} /></div><span className="node-step">CASCADE 02</span><strong>Landslide</strong><small><b>{risks.landslide}%</b> probability</small></div><ArrowDown className="flow-arrow" size={18} /><div className={`cascade-node ${riskTone(risks.power)}`}><div className="node-icon"><Zap size={20} /></div><span className="node-step">CASCADE 03</span><strong>Power failure</strong><small><b>{risks.power}%</b> probability</small></div><ArrowDown className="flow-arrow" size={18} /><div className={`cascade-node ${riskTone(risks.water)}`}><div className="node-icon"><Droplets size={20} /></div><span className="node-step">CASCADE 04</span><strong>Water contamination</strong><small><b>{risks.water}%</b> probability</small></div></div><div className="cascade-insight"><Siren size={17} /><span><b>Model insight</b> — high soil moisture and river levels are creating a strong flood-to-contamination dependency.</span><ArrowRight size={16} /></div></section>
-          <section className="panel risk-panel"><div className="panel-header"><div><div className="section-kicker">02 / RISK PROFILE</div><h2>Probability by hazard</h2></div><button className="more-button">View model <ArrowRight size={15} /></button></div><div className="risk-bars"><RiskBar label="Flooding" value={risks.flood} icon={Waves} /><RiskBar label="Landslide" value={risks.landslide} icon={Mountain} /><RiskBar label="Power failure" value={risks.power} icon={Zap} /><RiskBar label="Water contamination" value={risks.water} icon={Droplets} /></div><div className="risk-footer"><span><i className="legend-dot high" /> Critical &gt;75%</span><span><i className="legend-dot medium" /> Elevated 50–75%</span><span><i className="legend-dot low" /> Stable &lt;50%</span></div></section>
-        </div>
-        <div className="dashboard-grid lower-grid">
-          <section className="panel map-section"><div className="panel-header"><div><div className="section-kicker">03 / GEOSPATIAL RISK</div><h2>Monitored risk zones</h2><p>Click a zone to inspect vulnerability and response priority</p></div><button className="outline-button small"><Globe2 size={15} /> Full map</button></div><div className="map-wrap"><MapPanel selected={selected} onSelect={setSelected} /><div className="zone-detail"><div className="zone-detail-title"><div><span className={`zone-badge ${selectedZone.color}`}>{selectedZone.color === 'high' ? 'CRITICAL' : selectedZone.color === 'medium' ? 'ELEVATED' : 'STABLE'}</span><h3>{selectedZone.name} <small>{selectedZone.label}</small></h3></div><MapPin size={17} /></div><div className="zone-location">{selectedZone.lat} · {selectedZone.lon}</div><div className="zone-stat-grid"><div><span>Population</span><b>{selectedZone.population}</b></div><div><span>Risk index</span><b className="red-text">{selectedZone.risk}%</b></div><div><span>Vulnerability</span><b>{selectedZone.vulnerability}%</b></div><div><span>Priority score</span><b className="orange-text">{selectedZone.priority}</b></div></div><div className="priority-meter"><div><span>Emergency priority</span><b>{selectedZone.priority} / 100</b></div><div className="meter-track"><div style={{ width: `${selectedZone.priority}%` }} /></div></div><button className="zone-action">Allocate resources <ArrowRight size={15} /></button></div></div></section>
-          <section className="panel input-panel"><div className="panel-header"><div><div className="section-kicker">04 / INPUT SIMULATION</div><h2>Environmental conditions</h2><p>Adjust inputs and re-run the cascade model</p></div><CloudRain size={18} className="panel-icon" /></div><div className="input-grid">{([['rainfall','Rainfall','mm'],['river','River level','m'],['soil','Soil moisture','%'],['slope','Slope angle','°'],['elevation','Elevation','m'],['temperature','Temperature','°C'],['density','Population density','/km²'],['distance','Distance from river','km'],['roads','Road accessibility','%'],['infrastructure','Infrastructure density','%']] as const).map(([key, label, unit]) => <label key={key}><span>{label}</span><div className="input-wrap"><input type="number" value={inputs[key]} onChange={(event) => updateInput(key, event.target.value)} /><small>{unit}</small></div></label>)}</div><button className="simulate-button" onClick={runSimulation}><Activity size={16} /> {running ? 'Calculating cascade...' : 'Run disaster simulation'}<span>⌘ ↵</span></button></section>
-        </div>
-        <div className="dashboard-grid bottom-grid"><section className="panel allocation-panel"><div className="panel-header"><div><div className="section-kicker">05 / RESPONSE OPTIMISATION</div><h2>Resource allocation</h2><p>Priority-weighted distribution across monitored zones</p></div><span className="optimized-badge"><PackageCheck size={14} /> OPTIMISED</span></div><div className="allocation-table"><div className="allocation-row table-head"><span>Zone</span><span>Priority</span><span>Teams</span><span>Ambulances</span><span>Water units</span><span>Food kits</span></div>{zones.slice(0, 4).map((zone, index) => <div className="allocation-row" key={zone.name}><span><i className={`table-dot ${zone.color}`} /> <b>{zone.name}</b><small>{zone.label}</small></span><strong className={zone.priority > 80 ? 'red-text' : ''}>{zone.priority}</strong><span><Truck size={13} /> {index === 0 ? 2 : 1}</span><span><Siren size={13} /> 1</span><span>{index === 0 ? 50 : index === 1 ? 30 : 20}</span><span>{index === 0 ? 40 : index === 1 ? 25 : 15}</span></div>)}</div><div className="allocation-footer"><span><PackageCheck size={15} /> 74% of available resources deployed</span><button className="more-button">View all zones <ArrowRight size={15} /></button></div></section><section className="panel damage-panel"><div className="panel-header"><div><div className="section-kicker">06 / IMPACT OUTLOOK</div><h2>Damage estimation</h2></div><span className="trend-up">↓ 28% after optimisation</span></div><div className="damage-stats"><div><span>Population affected</span><strong>11,840</strong><small>people</small></div><div><span>Infrastructure exposure</span><strong>₹8.4Cr</strong><small>estimated</small></div><div><span>Response efficiency</span><strong className="cyan-text">+42%</strong><small>vs. baseline</small></div></div><div className="comparison"><div className="comparison-head"><span>Potential impact</span><span>Before <i /> After</span></div><div className="compare-row"><span>Damage severity</span><div className="compare-bars"><i className="before" style={{ width: '82%' }} /><i className="after" style={{ width: '58%' }} /></div><b>−29%</b></div><div className="compare-row"><span>Response delay</span><div className="compare-bars"><i className="before" style={{ width: '76%' }} /><i className="after" style={{ width: '43%' }} /></div><b>−43%</b></div></div></section></div>
-        <footer className="page-footer"><span><ShieldAlert size={14} /> CascadeGuard AI · Decision support prototype</span><span>Model v0.8.4 · Synthetic data · Last trained 24 Oct 2026</span></footer>
-      </div>
-    </section>
-  </main>
+  const [inputs,setInputs] = useState<Inputs>(initialInputs); const [draft,setDraft] = useState<Inputs>(initialInputs); const [risks,setRisks] = useState<Risks>(()=>predict(initialInputs)); const [activeNav,setActiveNav] = useState('Overview'); const [selected,setSelected] = useState('Zone A'); const [running,setRunning] = useState(false); const [status,setStatus] = useState('Ready to simulate'); const [scenario,setScenario] = useState('Extreme Rainfall'); const [sidebarOpen,setSidebarOpen] = useState(false); const [report,setReport] = useState(false)
+  const zones = useMemo(()=>makeZones(inputs,risks),[inputs,risks]); const selectedZone = zones.find(z=>z.name===selected) ?? zones[0]; const overall = Math.round(risks.flood*.36+risks.landslide*.24+risks.power*.18+risks.water*.22); const peopleAtRisk = zones.filter(z=>z.priority>50).reduce((n,z)=>n+z.population,0)
+  const allocation = useMemo(()=>{ const totals={teams:5,ambulances:3,water:100,food:150,medical:75}; const total=zones.reduce((n,z)=>n+z.priority,0); return zones.map(z=>({zone:z,teams:Math.max(0,Math.round(totals.teams*z.priority/total)),ambulances:Math.max(0,Math.round(totals.ambulances*z.priority/total)),water:Math.round(totals.water*z.priority/total),food:Math.round(totals.food*z.priority/total),medical:Math.round(totals.medical*z.priority/total)})) },[zones])
+  function run(next=inputs) { setRunning(true); setStatus('Calculating cascade dependencies...'); window.setTimeout(()=>{ setInputs(next); setDraft(next); setRisks(predict(next)); setRunning(false); setStatus('Simulation updated'); setSelected(makeZones(next,predict(next))[0].name) },650) }
+  function applyScenario(name:string) { setScenario(name); setDraft(scenarios[name]); run(scenarios[name]) }
+  function field(key:keyof Inputs,value:string) { setDraft(d=>({...d,[key]:Number(value)})) }
+  const nav=[['Overview',Gauge],['Risk zones',MapPin],['Resources',PackageCheck],['Cascade model',Layers3],['Reports',BarChart3]] as const
+  const reportText=`CASCADEGUARD AI RESPONSE SUMMARY\n\nEvent: ${scenario}\nRainfall: ${inputs.rainfall} mm | River: ${inputs.river} m | Soil moisture: ${inputs.soil}%\n\nHAZARD PROBABILITIES\nFlood ${risks.flood}% | Landslide ${risks.landslide}% | Power failure ${risks.power}% | Water contamination ${risks.water}%\n\nPopulation at risk: ${peopleAtRisk.toLocaleString()}\nHigh priority zones: ${zones.filter(z=>z.priority>60).map(z=>z.name).join(', ')}\n\nRECOMMENDATIONS\nPrioritise clean-water supplies, stage rescue teams at the highest priority zone, and monitor saturated slopes.\n\nSIMULATED ESTIMATES ONLY — NOT AN OFFICIAL DISASTER WARNING.`
+  function downloadReport(){ const blob=new Blob([reportText],{type:'text/plain'}); const url=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download='cascadeguard-response-summary.txt'; a.click(); URL.revokeObjectURL(url) }
+  return <main className="app-shell"><aside className={`sidebar ${sidebarOpen?'open':''}`}><div className="brand"><div className="brand-mark"><ShieldAlert size={19}/></div><div><strong>Cascade<span>Guard</span></strong><small>AI RESPONSE SYSTEM</small></div><button className="mobile-close" onClick={()=>setSidebarOpen(false)} aria-label="Close navigation"><X size={18}/></button></div><div className="system-status"><span className="pulse"/> SYSTEM OPERATIONAL <span className="status-time">LIVE</span></div><nav>{nav.map(([label,Icon])=><button key={label} className={activeNav===label?'active':''} onClick={()=>{setActiveNav(label);setSidebarOpen(false)}}><Icon size={17}/>{label}{label==='Risk zones'&&<span className="nav-count">5</span>}</button>)}</nav><div className="sidebar-bottom"><div className="sidebar-caption">SIMULATION MODE</div><div className="demo-note"><Radio size={15}/><span><b>SIMULATION PROTOTYPE</b><small>Synthetic data only</small></span></div></div></aside><section className="content"><header className="topbar"><button className="mobile-menu" onClick={()=>setSidebarOpen(true)} aria-label="Open navigation"><Menu/></button><div className="breadcrumb"><span>Operations center</span><ChevronDown size={14}/><b>{activeNav}</b></div><div className="topbar-actions"><div className="last-updated"><span className="live-dot"/> Simulation <small>{status}</small></div><button className="icon-button" aria-label="Notifications"><Bell size={18}/></button><div className="operator"><div className="avatar">RS</div><span><b>Response desk</b><small>Operator</small></span></div></div></header><div className="page-content"><div className="page-heading"><div><div className="eyebrow"><span className="eyebrow-line"/> DECISION SUPPORT / DISTRICT 07</div><h1>Disaster cascade <em>monitor</em></h1><p>Predict cascading impacts and direct emergency response where it matters most.</p></div><div className="heading-actions"><button className="outline-button" onClick={()=>document.getElementById('simulation-inputs')?.scrollIntoView({behavior:'smooth'})}><SlidersHorizontal size={15}/> Configure simulation</button><button className="primary-button" onClick={()=>run()}><Activity size={16}/> {running?'Running model...':'Run simulation'}</button></div></div><div className="prototype-banner"><AlertTriangle size={16}/><span><b>SIMULATION PROTOTYPE</b> — Predictions are simulated for demonstration and decision-support purposes only and are not an official disaster warning.</span>{status==='Simulation updated'&&<CheckCircle2 size={16}/>}</div><div className="scenario-bar"><span>Demo scenarios</span>{Object.keys(scenarios).map(name=><button key={name} className={scenario===name?'selected':''} onClick={()=>applyScenario(name)}>{name}</button>)}</div><section className="metrics-grid"><Metric label="Rainfall intensity" value={String(inputs.rainfall)} unit="mm" icon={CloudRain} detail="Input condition"/><Metric label="River level" value={inputs.river.toFixed(1)} unit="m" icon={Waves} detail="Input condition"/><Metric label="Overall disaster risk" value={`${overall}%`} icon={ShieldAlert} detail={`${severity(overall)} posture`}/><Metric label="People at risk" value={peopleAtRisk.toLocaleString()} icon={Users} detail="Across monitored zones"/><Metric label="High-risk zones" value={String(zones.filter(z=>z.priority>60).length)} icon={MapPin} detail="Priority intervention"/></section><div className="dashboard-grid"><section className="panel cascade-panel"><div className="panel-header"><div><div className="section-kicker">01 / CASCADE ENGINE</div><h2>Predicted disaster chain</h2><p>Multiple hazards influence each other through transparent rules</p></div><span className="confidence"><span className="live-dot"/> Rule-based model</span></div><div className="cascade-flow"><div className="cascade-node origin"><div className="node-icon"><CloudRain size={20}/></div><span className="node-step">PRIMARY EVENT</span><strong>Extreme rainfall</strong><small>{inputs.rainfall} mm / 24 hours</small></div><ArrowDown className="flow-arrow" size={18}/>{[['Flooding',risks.flood,Waves,'rainfall + river level'],['Landslide',risks.landslide,Mountain,'saturated soil + slope'],['Power failure',risks.power,Zap,'flood + infrastructure'],['Water contamination',risks.water,Droplets,'flood + population']].map(([label,value,Icon,trigger],idx)=><span key={String(label)} className="cascade-pair"><div className={`cascade-node ${tone(Number(value))}`}><div className="node-icon"><Icon size={20}/></div><span className="node-step">CASCADE 0{idx+1}</span><strong>{String(label)}</strong><small><b>{Number(value)}%</b> probability · {String(trigger)}</small></div>{idx<3&&<ArrowDown className="flow-arrow" size={18}/>}</span>)}</div><div className="cascade-insight"><Siren size={17}/><span><b>Recommendation</b> — {risks.flood>70?'Pre-position clean water and rescue teams before river crest.':'Continue monitoring thresholds and keep response teams on standby.'}</span></div></section><section className="panel risk-panel"><div className="panel-header"><div><div className="section-kicker">02 / RISK PROFILE</div><h2>Probability by hazard</h2></div></div><div className="risk-bars"><RiskBar label="Flooding" value={risks.flood} icon={Waves}/><RiskBar label="Landslide" value={risks.landslide} icon={Mountain}/><RiskBar label="Power failure" value={risks.power} icon={Zap}/><RiskBar label="Water contamination" value={risks.water} icon={Droplets}/></div><div className="risk-footer"><span><i className="legend-dot high"/> Critical &gt;75%</span><span><i className="legend-dot medium"/> Elevated 50–75%</span></div></section></div><div className="dashboard-grid lower-grid"><section className="panel map-section"><div className="panel-header"><div><div className="section-kicker">03 / GEOSPATIAL RISK</div><h2>Monitored risk zones</h2><p>Leaflet map · select a marker for response details</p></div></div><div className="map-wrap"><ZoneMap zones={zones} selected={selected} onSelect={z=>setSelected(z.name)}/><div className="zone-detail"><span className={`zone-badge ${tone(selectedZone.priority)}`}>{severity(selectedZone.priority).toUpperCase()}</span><h3>{selectedZone.name}</h3><div className="zone-stat-grid"><div><span>Population</span><b>{selectedZone.population.toLocaleString()}</b></div><div><span>Flood risk</span><b className="red-text">{selectedZone.flood}%</b></div><div><span>Landslide</span><b>{selectedZone.landslide}%</b></div><div><span>Priority</span><b className="orange-text">{selectedZone.priority}</b></div></div><div className="priority-meter"><div><span>Accessibility</span><b>{selectedZone.accessibility}%</b></div><div className="meter-track"><div style={{width:`${selectedZone.accessibility}%`}}/></div></div><button className="zone-action" onClick={()=>setActiveNav('Resources')}>Allocate resources <ArrowRight size={15}/></button></div></div></section><section className="panel input-panel" id="simulation-inputs"><div className="panel-header"><div><div className="section-kicker">04 / CONFIGURE SIMULATION</div><h2>Environmental conditions</h2><p>Set values, apply, then run the model</p></div></div><div className="input-grid">{([['rainfall','Rainfall intensity','mm',0,500],['river','River level','m',0,15],['soil','Soil moisture','%',0,100],['slope','Slope','degrees',0,60],['density','Population density','/km²',0,10000],['roads','Road accessibility','%',0,100],['infrastructure','Infrastructure vulnerability','%',0,100],['distance','Distance from river','km',0,20]] as const).map(([key,label,unit,min,max])=><label key={key}><span>{label}</span><div className="input-wrap"><input type="number" min={min} max={max} value={draft[key]} onChange={e=>field(key,e.target.value)}/><small>{unit}</small></div></label>)}</div><div className="input-actions"><button className="simulate-button" onClick={()=>run(draft)}><Activity size={16}/> Apply simulation</button><button className="outline-button" onClick={()=>{setDraft(initialInputs);run(initialInputs)}}><RotateCcw size={15}/> Reset</button><button className="outline-button" onClick={()=>applyScenario('Extreme Rainfall')}>Use example</button></div></section></div><section className="panel allocation-panel"><div className="panel-header"><div><div className="section-kicker">05 / RESPONSE OPTIMISATION</div><h2>Priority-based resource allocation</h2><p>Higher-priority zones receive resources first</p></div><span className="optimized-badge"><PackageCheck size={14}/> OPTIMISED</span></div><div className="allocation-table"><div className="allocation-row table-head"><span>Zone</span><span>Priority</span><span>Teams</span><span>Ambulances</span><span>Water</span><span>Food</span><span>Medical</span></div>{allocation.map(a=><div className="allocation-row" key={a.zone.name}><span><i className={`table-dot ${tone(a.zone.priority)}`}/><b>{a.zone.name}</b></span><strong>{a.zone.priority}</strong><span><Truck size={13}/> {a.teams}</span><span><Siren size={13}/> {a.ambulances}</span><span>{a.water}</span><span>{a.food}</span><span>{a.medical}</span></div>)}</div><div className="allocation-footer"><span><PackageCheck size={15}/> {Math.min(100,Math.round(zones.reduce((n,z)=>n+z.priority,0)/zones.length))}% weighted utilisation</span><span>Before: unequal allocation → After: priority-based</span></div></section><div className="dashboard-grid bottom-grid"><section className="panel damage-panel"><div className="panel-header"><div><div className="section-kicker">06 / IMPACT OUTLOOK</div><h2>Simulated estimates</h2></div></div><div className="damage-stats"><div><span>Population affected</span><strong>{Math.round(peopleAtRisk*overall/100).toLocaleString()}</strong><small>people</small></div><div><span>Infrastructure at risk</span><strong>{Math.round(overall*1.4)}%</strong><small>exposure index</small></div><div><span>Road impact</span><strong>{100-inputs.roads}%</strong><small>accessibility loss</small></div></div><div className="comparison"><div className="comparison-head"><span>Response improvement</span><b>Before 42% · After 78%</b></div><div className="risk-track"><div className="risk-fill low" style={{width:'78%'}}/></div></div></section><section className="panel alerts-panel"><div className="panel-header"><div><div className="section-kicker">07 / EMERGENCY ALERTS</div><h2>Recommendations</h2></div></div><div className="alerts-list"><div><AlertTriangle size={16}/><span><b>{overall>75?'CRITICAL':'WARNING'}</b> {zones[0].name} has a {zones[0].flood}% flood probability. Immediate response recommended.</span></div><div><Mountain size={16}/><span><b>WARNING</b> {inputs.rainfall>250?'High rainfall':'Rainfall'} combined with terrain creates landslide risk.</span></div><div><Droplets size={16}/><span><b>ALERT</b> Flooding may cause water contamination. Prioritise clean-water supplies.</span></div></div></section></div><section className="panel report-panel"><div className="panel-header"><div><div className="section-kicker">08 / REPORTS</div><h2>Response summary</h2><p>Generate a print-friendly summary or download the simulated report.</p></div><FileText size={20}/></div><div className="report-actions"><button className="primary-button" onClick={()=>setReport(true)}><FileText size={15}/> Generate report</button><button className="outline-button" onClick={downloadReport}><Download size={15}/> Download report</button></div>{report&&<pre className="report-preview">{reportText}</pre>}</section><footer className="page-footer"><span><ShieldAlert size={14}/> CascadeGuard AI · Decision support prototype</span><span>Model v0.8.4 · Synthetic data · Last updated {status}</span></footer></div></section></main>
 }
